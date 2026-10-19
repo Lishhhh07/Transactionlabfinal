@@ -4,7 +4,7 @@ An interactive simulator for **database transactions and concurrency control**.
 Build concurrent transactions, choose a schedule and an isolation level, and watch
 what the DBMS does: locks, waiting, deadlocks, anomalies and serializability.
 
-**Live demo:** <your-vercel-url>
+**Live demo:** https://transactionlabfinal.vercel.app/
 
 ## What it demonstrates
 
