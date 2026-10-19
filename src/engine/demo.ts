@@ -1,4 +1,5 @@
 import { simulate, parseOps } from "./index";
+import { detectAnomalies } from "./index";
 
 const result = simulate({
   initialDb: { A: 1000 },
@@ -11,5 +12,9 @@ const result = simulate({
 
 for (const s of result.steps) {
   console.log(`Step ${s.index + 1}: ${s.message}   DB=${JSON.stringify(s.dbAfter)}`);
+}
+
+for (const a of detectAnomalies(result.steps)) {
+  console.log(`⚠ ${a.title} (${a.item}) at step ${a.at + 1}: ${a.explanation}`);
 }
 console.log("Final:", result.finalDb, result.finalStatus);

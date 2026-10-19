@@ -1,5 +1,5 @@
 import type { NextConfig } from "next";
-
+import path from "path";
 const nextConfig: NextConfig = {
   /* config options here */
   cacheComponents: true,
@@ -13,5 +13,6 @@ const nextConfig: NextConfig = {
     },
   },
 };
+
 
 export default nextConfig;

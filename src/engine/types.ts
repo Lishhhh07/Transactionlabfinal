@@ -1,13 +1,13 @@
-export type TxnId = string;   // "T1" for transactionss
-export type ItemId = string;  // "A", like DB K ITEM NAMES
-// A WRITE either writes a constant, or "what I previously read + delta(+-200 wtever)".
-// The second form is what makes "withdraw 200" realistic:
-//   READ(A); WRITE(A, A-200)   → delta = -200
-//like first is write A to wtever number, second is like write A-VALUE
+// ---------- Basic identifiers ----------
+export type TxnId = string;   // "T1", "T2"
+export type ItemId = string;  // "A", "B"
+
+// ---------- Values ----------
 export type ValueExpr =
   | { kind: "const"; value: number }
   | { kind: "readPlus"; item: ItemId; delta: number };
 
+// ---------- Operations ----------
 export type Operation =
   | { type: "READ"; item: ItemId }
   | { type: "WRITE"; item: ItemId; value: ValueExpr }
@@ -20,54 +20,114 @@ export interface Transaction {
 }
 
 export type Database = Record<ItemId, number>;
+
+// ---------- Input to the engine ----------
 export interface Scenario {
   initialDb: Database;
   transactions: Transaction[];
-  /** Interleaving: each entry runs the NEXT unexecuted op of that txn specific transaction. */
+  /** Preferred interleaving. Blocked transactions are skipped and resumed later. */
   schedule: TxnId[];
 }
 
-//statee
-export type TxnStatus = "ACTIVE" | "COMMITTED" | "ABORTED";
+// NEW: simulator options
+export type LockingMode = "NONE" | "STRICT_2PL";
+
+// NEW
+export type IsolationLevel =
+  | "READ_UNCOMMITTED"
+  | "READ_COMMITTED"
+  | "REPEATABLE_READ"
+  | "SERIALIZABLE";
+
+/** What the UI selects: no concurrency control, or one of the four levels. */
+export type CcMode = "NONE" | IsolationLevel;
+
+export type DeadlockMode = "HALT" | "ABORT_VICTIM";
+export type VictimPolicy = "YOUNGEST" | "OLDEST" | "FEWEST_WRITES";
+
+export interface SimOptions {
+  locking?: LockingMode;      // old switch. "STRICT_2PL" means REPEATABLE_READ
+  isolation?: IsolationLevel; // if set, it wins over `locking`
+  deadlock?: DeadlockMode;    // NEW. default "HALT"
+  victim?: VictimPolicy;      // NEW. default "YOUNGEST"
+}
+
+// ---------- NEW: Locks ----------
+export type LockMode = "S" | "X";
+
+export interface LockHolder {
+  txn: TxnId;
+  mode: LockMode;
+}
+
+/** One row of the lock table, as shown in the UI. */
+export interface LockRow {
+  item: ItemId;
+  holders: LockHolder[];
+  waiting: LockHolder[];
+}
+// ---------- NEW: Deadlocks ----------
+/** "from is waiting for a lock that `to` holds." One edge of the wait-for graph. */
+export interface WaitEdge {
+  from: TxnId;
+  to: TxnId;
+  item: ItemId;
+}
+
+export interface DeadlockEvent {
+  cycle: TxnId[];           // e.g. ["T1","T2"] means T1 → T2 → T1
+  edges: WaitEdge[];        // the edges that form the cycle
+  detectedAt: number;       // index of the last step before the deadlock was noticed
+  victim?: TxnId;           // missing in HALT mode
+  victimStep?: number;      // index of the DEADLOCK_VICTIM step
+  reason?: string;          // why this victim was chosen
+}
+
+// ---------- Runtime state ----------
+export type TxnStatus = "ACTIVE" | "BLOCKED" | "COMMITTED" | "ABORTED"; // NEW: BLOCKED
 
 export interface UndoEntry {
   item: ItemId;
   before: number;
 }
-/** Internal mutable state (not shown directly in the trace). */
+
 export interface TxnRuntime {
   id: TxnId;
   status: TxnStatus;
   nextOp: number;
-  /** Values this transaction has read (its private "local variables"). */
   locals: Record<ItemId, number>;
-  undoLog: UndoEntry[]; // for rollback
+  undoLog: UndoEntry[];
 }
 
-export type StepOutcome = "OK";
+export type StepOutcome = "OK" | "BLOCKED" | "DEADLOCK_VICTIM"; // NEW: BLOCKED (Phase 5 adds DEADLOCK_VICTIM)
 
 export interface TxnSnapshot {
   status: TxnStatus;
   nextOp: number;
   locals: Record<ItemId, number>;
 }
-//for like evry step in the trace, we want to know what happened, and what the db looks like after that step
+
 export interface TraceStep {
-  index: number;            // 0-based step number
+  index: number;
   txn: TxnId;
   op: Operation;
   outcome: StepOutcome;
-  message: string;          // human-readable explanation
-  item?: ItemId;            // for READ / WRITE
-  valueRead?: number;       // for READ
-  before?: number;          // for WRITE (old value)
-  after?: number;           // for WRITE (new value)
-  dbAfter: Database;        // full DB snapshot after this step
+  message: string;
+  item?: ItemId;
+  valueRead?: number;
+  before?: number;
+  after?: number;
+  blockedBy?: TxnId[];      // NEW: for BLOCKED steps, who holds the conflicting lock
+  resumed?: boolean;        // NEW: true if this op ran after waiting for a lock
+  dbAfter: Database;
   txnsAfter: Record<TxnId, TxnSnapshot>;
+  locksAfter: LockRow[];    // NEW: lock table after this step
 }
 
 export interface SimulationResult {
   steps: TraceStep[];
   finalDb: Database;
   finalStatus: Record<TxnId, TxnStatus>;
+  blockedAtEnd: TxnId[];
+  deadlocks: DeadlockEvent[];   // NEW
 }

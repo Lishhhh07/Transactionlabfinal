@@ -1,24 +1,44 @@
 "use client";
 
-import { Scenario, SimulationResult, TxnSnapshot } from "@/engine";
+import { LockingMode, LockMode, Scenario, SimulationResult, TxnSnapshot } from "@/engine";
 import { styleOf } from "./colors";
 
 interface Props {
   scenario: Scenario;
   result: SimulationResult;
   cursor: number;
+  locking: LockingMode;
 }
 
 const STATUS_STYLE: Record<string, string> = {
   ACTIVE: "bg-slate-200 text-slate-700",
+  BLOCKED: "bg-amber-100 text-amber-800",
   COMMITTED: "bg-green-100 text-green-800",
   ABORTED: "bg-red-100 text-red-800",
 };
 
-export default function StatePanel({ scenario, result, cursor }: Props) {
+const MODE_STYLE: Record<LockMode, string> = {
+  S: "bg-sky-100 text-sky-800 border-sky-300",
+  X: "bg-rose-100 text-rose-800 border-rose-300",
+};
+
+function LockPill({ mode, txn, dashed }: { mode: LockMode; txn: string; dashed?: boolean }) {
+  return (
+    <span
+      className={`mr-1 inline-block rounded border px-1.5 py-0.5 text-xs font-semibold ${MODE_STYLE[mode]} ${
+        dashed ? "border-dashed" : ""
+      }`}
+    >
+      {mode} · {txn}
+    </span>
+  );
+}
+
+export default function StatePanel({ scenario, result, cursor, locking }: Props) {
   const step = cursor > 0 ? result.steps[cursor - 1] : null;
 
   const db = step ? step.dbAfter : scenario.initialDb;
+  const locks = step ? step.locksAfter : [];
 
   const txns: Record<string, TxnSnapshot> = step
     ? step.txnsAfter
@@ -27,11 +47,21 @@ export default function StatePanel({ scenario, result, cursor }: Props) {
       );
 
   const changedItem = step && step.after !== undefined ? step.item : undefined;
+  const blocked = step?.outcome === "BLOCKED";
+  const victim = step?.outcome === "DEADLOCK_VICTIM";
 
   return (
     <div className="space-y-4">
       {/* Explanation of current step */}
-      <div className="min-h-[3.5rem] rounded-md border border-slate-300 bg-white p-3 text-sm">
+      <div
+               className={`min-h-[3.5rem] rounded-md border p-3 text-sm ${
+          victim
+            ? "border-red-300 bg-red-50"
+            : blocked
+            ? "border-amber-300 bg-amber-50"
+            : "border-slate-300 bg-white"
+        }`}
+      >
         {step ? (
           <>
             <span className="mr-2 font-semibold text-slate-500">Step {step.index + 1}:</span>
@@ -44,17 +74,13 @@ export default function StatePanel({ scenario, result, cursor }: Props) {
 
       {/* Database */}
       <div>
-        <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Database
-        </h3>
+        <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-500">Database</h3>
         <div className="flex flex-wrap gap-2">
           {Object.entries(db).map(([item, value]) => (
             <div
               key={item}
               className={`rounded-md border px-4 py-2 text-center transition-colors ${
-                item === changedItem
-                  ? "border-amber-400 bg-amber-100"
-                  : "border-slate-300 bg-white"
+                item === changedItem ? "border-amber-400 bg-amber-100" : "border-slate-300 bg-white"
               }`}
             >
               <div className="text-xs text-slate-500">{item}</div>
@@ -64,11 +90,56 @@ export default function StatePanel({ scenario, result, cursor }: Props) {
         </div>
       </div>
 
+      {/* Lock table */}
+      <div>
+        <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-500">Lock table</h3>
+        {locking === "NONE" ? (
+          <div className="rounded-md border border-slate-300 bg-white p-2 text-xs text-slate-400">
+            Locking is off, so there is no concurrency control.
+          </div>
+        ) : locks.length === 0 ? (
+          <div className="rounded-md border border-slate-300 bg-white p-2 text-xs text-slate-400">
+            No locks held.
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-md border border-slate-300 bg-white">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-50 text-left text-xs text-slate-500">
+                  <th className="px-2 py-1">Item</th>
+                  <th className="px-2 py-1">Held by</th>
+                  <th className="px-2 py-1">Waiting</th>
+                </tr>
+              </thead>
+              <tbody>
+                {locks.map((row) => (
+                  <tr key={row.item} className="border-b border-slate-100">
+                    <td className="px-2 py-1.5 font-mono font-bold">{row.item}</td>
+                    <td className="px-2 py-1.5">
+                      {row.holders.length === 0 ? (
+                        <span className="text-xs text-slate-400">free</span>
+                      ) : (
+                        row.holders.map((h) => <LockPill key={h.txn} mode={h.mode} txn={h.txn} />)
+                      )}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      {row.waiting.length === 0 ? (
+                        <span className="text-xs text-slate-400">–</span>
+                      ) : (
+                        row.waiting.map((w) => <LockPill key={w.txn} mode={w.mode} txn={w.txn} dashed />)
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* Transactions */}
       <div>
-        <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-500">
-          Transactions
-        </h3>
+        <h3 className="mb-1 text-sm font-semibold uppercase tracking-wide text-slate-500">Transactions</h3>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {scenario.transactions.map((t) => {
             const snap = txns[t.id];
@@ -85,10 +156,7 @@ export default function StatePanel({ scenario, result, cursor }: Props) {
                   Progress: {snap.nextOp}/{t.ops.length} ops
                 </div>
                 <div className="mt-1 font-mono text-xs">
-                  Local reads:{" "}
-                  {locals.length === 0
-                    ? "none"
-                    : locals.map(([k, v]) => `${k}=${v}`).join(", ")}
+                  Local reads: {locals.length === 0 ? "none" : locals.map(([k, v]) => `${k}=${v}`).join(", ")}
                 </div>
               </div>
             );
